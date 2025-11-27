@@ -4,19 +4,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>英语学习工具 - 图片识别版</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body>
     <div id="root"></div>
+    
+    <!-- 异步加载 Tesseract.js -->
+    <script>
+        window.tesseractLoaded = false;
+        window.tesseractError = false;
+        
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js';
+        script.onload = () => {
+            console.log('✅ Tesseract.js 加载成功');
+            window.tesseractLoaded = true;
+        };
+        script.onerror = () => {
+            console.error('❌ Tesseract.js 加载失败');
+            window.tesseractError = true;
+        };
+        document.head.appendChild(script);
+    </script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // Lucide React 图标组件
+        // 图标组件
         const Upload = () => (
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -76,6 +93,14 @@
             </svg>
         );
 
+        const AlertCircle = () => (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+        );
+
         function EnglishLearningTool() {
             const [image, setImage] = useState(null);
             const [extractedText, setExtractedText] = useState('');
@@ -88,26 +113,30 @@
                     const saved = localStorage.getItem('englishLearningWords');
                     return saved ? JSON.parse(saved) : [];
                 } catch (error) {
-                    console.error('加载生词本失败:', error);
                     return [];
                 }
             });
             const [showSavedWords, setShowSavedWords] = useState(false);
             const [ocrProgress, setOcrProgress] = useState(0);
+            const [ocrReady, setOcrReady] = useState(false);
+            const [ocrError, setOcrError] = useState(false);
             const workerRef = useRef(null);
 
             useEffect(() => {
                 try {
                     localStorage.setItem('englishLearningWords', JSON.stringify(savedWords));
                 } catch (error) {
-                    console.error('保存生词本失败:', error);
+                    console.error('保存失败:', error);
                 }
             }, [savedWords]);
 
             useEffect(() => {
-                const loadWorker = async () => {
+                let checkInterval;
+                
+                const initWorker = async () => {
                     if (typeof Tesseract !== 'undefined') {
                         try {
+                            console.log('开始初始化 OCR Worker...');
                             workerRef.current = await Tesseract.createWorker('eng', 1, {
                                 logger: m => {
                                     if (m.status === 'recognizing text') {
@@ -115,15 +144,24 @@
                                     }
                                 }
                             });
-                            console.log('OCR Worker 初始化成功');
+                            setOcrReady(true);
+                            console.log('✅ OCR 初始化成功');
                         } catch (error) {
-                            console.error('OCR Worker 初始化失败:', error);
+                            console.error('❌ OCR 初始化失败:', error);
+                            setOcrError(true);
                         }
+                    } else if (window.tesseractError) {
+                        setOcrError(true);
+                    } else {
+                        // 继续等待加载
+                        checkInterval = setTimeout(initWorker, 500);
                     }
                 };
-                loadWorker();
+
+                initWorker();
                 
                 return () => {
+                    if (checkInterval) clearTimeout(checkInterval);
                     if (workerRef.current) {
                         workerRef.current.terminate();
                     }
@@ -141,28 +179,27 @@
                     setOcrProgress(0);
                     
                     try {
-                        if (workerRef.current) {
+                        if (workerRef.current && ocrReady) {
+                            console.log('开始 OCR 识别...');
                             const { data: { text } } = await workerRef.current.recognize(event.target.result);
                             
                             if (text.trim()) {
                                 setExtractedText(text.trim());
-                                
                                 const wordList = text.match(/\b[a-zA-Z]+\b/g) || [];
                                 const uniqueWords = [...new Set(wordList.map(w => w.toLowerCase()))];
                                 setWords(uniqueWords.filter(w => w.length > 2));
-                                
-                                setTranslation('✅ 识别完成! 点击单词查看详细释义。(完整翻译需要接入翻译API)');
+                                setTranslation('✅ 识别完成! 点击单词查看详细释义');
                             } else {
-                                setExtractedText('未识别到文字,请尝试更清晰的图片');
-                                setTranslation('');
+                                setExtractedText('未识别到文字');
+                                setTranslation('请尝试更清晰的图片');
                                 setWords([]);
                             }
                         } else {
-                            alert('OCR引擎未加载,请刷新页面重试');
+                            throw new Error('OCR 引擎未就绪');
                         }
                     } catch (error) {
-                        console.error('OCR 识别失败:', error);
-                        alert('图片识别失败: ' + error.message);
+                        console.error('识别失败:', error);
+                        alert('图片识别失败: ' + error.message + '\n\n请刷新页面重试');
                         setExtractedText('');
                         setTranslation('');
                         setWords([]);
@@ -185,20 +222,18 @@
 
             const getWordDetails = (word) => {
                 const dictionary = {
-                    'hello': { phonetic: '/həˈləʊ/', translation: '你好；哈喽', definition: '用于打招呼或引起注意的感叹词', examples: ['Hello, how are you?', 'Say hello to your family.'], memory: '想象一个人挥手说"嗨~喽~"的场景', level: '基础' },
-                    'welcome': { phonetic: '/ˈwelkəm/', translation: '欢迎；受欢迎的', definition: '热情地接待或招待某人', examples: ['Welcome to our school.', 'You are always welcome here.'], memory: 'well(好) + come(来) = 好好地来 → 欢迎', level: '基础' },
-                    'learning': { phonetic: '/ˈlɜːrnɪŋ/', translation: '学习；学问', definition: '获取知识或技能的过程', examples: ['Learning English is fun.', 'He has a love of learning.'], memory: 'learn(学习) + ing(进行时) → 正在学习中', level: '基础' },
-                    'tool': { phonetic: '/tuːl/', translation: '工具；器具', definition: '用来完成特定任务的器具或设备', examples: ['This is a useful tool.', 'We need the right tools.'], memory: '发音像"兔儿"，想象兔子用的工具', level: '基础' },
-                    'everyday': { phonetic: '/ˈevrideɪ/', translation: '每天的；日常的', definition: '每天发生的或用于日常的', examples: ['Everyday life can be interesting.', 'These are everyday objects.'], memory: 'every(每个) + day(天) → 每天的', level: '中级' },
-                    'image': { phonetic: '/ˈɪmɪdʒ/', translation: '图像；形象', definition: '视觉呈现或心理印象', examples: ['This image is beautiful.', 'The company has a good image.'], memory: '想象"一米距"看图片的场景', level: '中级' }
+                    'hello': { phonetic: '/həˈləʊ/', translation: '你好；哈喽', definition: '用于打招呼或引起注意', examples: ['Hello, how are you?', 'Say hello to your family.'], memory: '想象挥手说"嗨~喽~"', level: '基础' },
+                    'welcome': { phonetic: '/ˈwelkəm/', translation: '欢迎；受欢迎的', definition: '热情地接待某人', examples: ['Welcome to our school.'], memory: 'well(好) + come(来) = 欢迎', level: '基础' },
+                    'learning': { phonetic: '/ˈlɜːrnɪŋ/', translation: '学习；学问', definition: '获取知识或技能', examples: ['Learning English is fun.'], memory: 'learn + ing = 正在学习', level: '基础' },
+                    'tool': { phonetic: '/tuːl/', translation: '工具；器具', definition: '用来完成任务的器具', examples: ['This is a useful tool.'], memory: '发音像"兔儿"', level: '基础' },
+                    'image': { phonetic: '/ˈɪmɪdʒ/', translation: '图像；形象', definition: '视觉呈现', examples: ['This image is beautiful.'], memory: '想象看图片', level: '中级' }
                 };
-
                 return dictionary[word.toLowerCase()] || {
                     phonetic: `/${word}/`,
-                    translation: '暂无释义 (需要接入词典API)',
-                    definition: '点击发音可听取读音',
+                    translation: '暂无释义',
+                    definition: '点击发音听读音',
                     examples: [],
-                    memory: '多看多记，重复是记忆的关键',
+                    memory: '多看多记',
                     level: '待学习'
                 };
             };
@@ -210,16 +245,15 @@
 
             const saveWord = (word) => {
                 if (!savedWords.find(w => w.word === word.word)) {
-                    const newWord = { ...word, savedAt: new Date().toISOString() };
-                    setSavedWords([...savedWords, newWord]);
-                    alert('✅ 已保存到生词本!');
+                    setSavedWords([...savedWords, { ...word, savedAt: new Date().toISOString() }]);
+                    alert('✅ 已保存!');
                 } else {
-                    alert('ℹ️ 该单词已在生词本中');
+                    alert('ℹ️ 已在生词本中');
                 }
             };
 
             const removeWord = (wordToRemove) => {
-                if (confirm(`确定要删除"${wordToRemove}"吗?`)) {
+                if (confirm(`确定删除"${wordToRemove}"?`)) {
                     setSavedWords(savedWords.filter(w => w.word !== wordToRemove));
                 }
             };
@@ -237,30 +271,28 @@
                                     <h2 className="text-2xl font-bold text-gray-800">生词本 ({savedWords.length})</h2>
                                     <div className="w-20"></div>
                                 </div>
-
                                 {savedWords.length === 0 ? (
                                     <div className="text-center py-12 text-gray-400">
-                                        <BookOpen />
-                                        <p className="mt-4">还没有保存的单词</p>
+                                        <BookOpen className="w-16 h-16 mx-auto mb-4" />
+                                        <p>还没有保存的单词</p>
                                     </div>
                                 ) : (
                                     <div className="grid gap-4">
                                         {savedWords.map((word, index) => (
-                                            <div key={index} className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
+                                            <div key={index} className="border rounded-xl p-4 hover:shadow-md transition">
                                                 <div className="flex items-start justify-between">
                                                     <div className="flex-1">
                                                         <div className="flex items-center gap-3 mb-2">
                                                             <h3 className="text-xl font-bold text-blue-600">{word.word}</h3>
                                                             <button onClick={() => speakText(word.word)} className="p-1 hover:bg-blue-50 rounded-full">
-                                                                <Volume2 />
+                                                                <Volume2 className="w-4 h-4" />
                                                             </button>
                                                             <span className="text-sm text-gray-500">{word.phonetic}</span>
                                                         </div>
-                                                        <p className="text-gray-700 mb-2">{word.translation}</p>
-                                                        <p className="text-sm text-gray-500">{word.definition}</p>
+                                                        <p className="text-gray-700">{word.translation}</p>
                                                     </div>
                                                     <button onClick={() => removeWord(word.word)} className="p-2 text-red-500 hover:bg-red-50 rounded-full">
-                                                        <Trash2 />
+                                                        <Trash2 className="w-4 h-4" />
                                                     </button>
                                                 </div>
                                             </div>
@@ -279,64 +311,55 @@
                         <div className="max-w-2xl mx-auto">
                             <div className="bg-white rounded-2xl shadow-xl p-6 sm:p-8">
                                 <div className="flex items-center justify-between mb-6">
-                                    <button onClick={() => setSelectedWord(null)} className="flex items-center gap-2 text-gray-600 hover:text-gray-900">
+                                    <button onClick={() => setSelectedWord(null)} className="flex items-center gap-2 text-gray-600">
                                         <ArrowLeft />
                                         返回
                                     </button>
                                     <button onClick={() => saveWord(selectedWord)} className="flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-full hover:bg-green-600">
-                                        <Save />
-                                        保存到生词本
+                                        <Save className="w-4 h-4" />
+                                        保存
                                     </button>
                                 </div>
-
                                 <div className="text-center mb-8">
                                     <h1 className="text-4xl font-bold text-blue-600 mb-3">{selectedWord.word}</h1>
                                     <div className="flex items-center justify-center gap-3 mb-2">
                                         <button onClick={() => speakText(selectedWord.word)} className="bg-blue-500 text-white p-3 rounded-full hover:bg-blue-600">
-                                            <Volume2 />
+                                            <Volume2 className="w-5 h-5" />
                                         </button>
                                         <span className="text-xl text-gray-600">{selectedWord.phonetic}</span>
                                     </div>
                                     <span className="inline-block bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-sm">{selectedWord.level}</span>
                                 </div>
-
                                 <div className="mb-6">
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
-                                        <BookOpen />
+                                    <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                                        <BookOpen className="w-5 h-5" />
                                         中文释义
                                     </h3>
-                                    <p className="text-xl text-gray-700 bg-blue-50 p-4 rounded-lg">{selectedWord.translation}</p>
+                                    <p className="text-xl bg-blue-50 p-4 rounded-lg">{selectedWord.translation}</p>
                                 </div>
-
                                 <div className="mb-6">
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-2">英文定义</h3>
-                                    <p className="text-gray-600 bg-gray-50 p-4 rounded-lg">{selectedWord.definition}</p>
+                                    <h3 className="text-lg font-semibold mb-2">英文定义</h3>
+                                    <p className="bg-gray-50 p-4 rounded-lg">{selectedWord.definition}</p>
                                 </div>
-
                                 {selectedWord.examples.length > 0 && (
                                     <div className="mb-6">
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-2">例句</h3>
-                                        <div className="space-y-3">
-                                            {selectedWord.examples.map((example, index) => (
-                                                <div key={index} className="bg-green-50 p-3 rounded-lg">
-                                                    <div className="flex items-start gap-2">
-                                                        <button onClick={() => speakText(example)} className="p-1 hover:bg-green-100 rounded-full mt-1">
-                                                            <Volume2 />
-                                                        </button>
-                                                        <p className="text-gray-700 flex-1">{example}</p>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                        <h3 className="text-lg font-semibold mb-2">例句</h3>
+                                        {selectedWord.examples.map((ex, i) => (
+                                            <div key={i} className="bg-green-50 p-3 rounded-lg mb-2 flex gap-2">
+                                                <button onClick={() => speakText(ex)} className="p-1">
+                                                    <Volume2 className="w-4 h-4" />
+                                                </button>
+                                                <p className="flex-1">{ex}</p>
+                                            </div>
+                                        ))}
                                     </div>
                                 )}
-
                                 <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4">
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
-                                        <Lightbulb />
+                                    <h3 className="font-semibold mb-2 flex items-center gap-2">
+                                        <Lightbulb className="w-5 h-5" />
                                         记忆技巧
                                     </h3>
-                                    <p className="text-gray-700">{selectedWord.memory}</p>
+                                    <p>{selectedWord.memory}</p>
                                 </div>
                             </div>
                         </div>
@@ -349,51 +372,69 @@
                     <div className="max-w-4xl mx-auto">
                         <div className="text-center mb-8">
                             <h1 className="text-3xl sm:text-4xl font-bold text-gray-800 mb-2">📚 英语学习工具</h1>
-                            <p className="text-gray-600">上传日常英文截图，AI自动识别，轻松学习每个单词</p>
+                            <p className="text-gray-600">上传英文截图,AI自动识别学习</p>
                         </div>
+
+                        {ocrError && (
+                            <div className="bg-red-50 border-2 border-red-200 rounded-xl p-4 mb-6">
+                                <div className="flex gap-3">
+                                    <AlertCircle className="w-6 h-6 text-red-600" />
+                                    <div>
+                                        <h3 className="font-bold text-red-800">OCR 加载失败</h3>
+                                        <p className="text-sm text-red-700 mt-1">请刷新页面重试,或检查网络连接</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {!ocrReady && !ocrError && (
+                            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4 mb-6">
+                                <div className="flex gap-3 items-center">
+                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                                    <p className="text-blue-700">正在加载 OCR 引擎...</p>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex justify-end mb-4">
                             <button onClick={() => setShowSavedWords(true)} className="flex items-center gap-2 bg-purple-500 text-white px-4 py-2 rounded-full hover:bg-purple-600">
-                                <BookOpen />
+                                <BookOpen className="w-4 h-4" />
                                 生词本 ({savedWords.length})
                             </button>
                         </div>
 
                         {!image && (
                             <div className="bg-white rounded-2xl shadow-xl p-8">
-                                <label className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-xl p-12 cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition">
-                                    <Upload />
-                                    <span className="text-lg text-gray-700 mb-2 mt-4">点击上传英文截图</span>
-                                    <span className="text-sm text-gray-500">支持 JPG, PNG 格式</span>
-                                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                                <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-12 transition ${ocrReady ? 'border-blue-300 cursor-pointer hover:border-blue-500 hover:bg-blue-50' : 'border-gray-300 cursor-not-allowed opacity-50'}`}>
+                                    <Upload className="w-12 h-12 mb-4" />
+                                    <span className="text-lg text-gray-700 mb-2">
+                                        {ocrReady ? '点击上传英文截图' : '请等待 OCR 加载完成...'}
+                                    </span>
+                                    <span className="text-sm text-gray-500">支持 JPG, PNG</span>
+                                    <input type="file" accept="image/*" onChange={handleImageUpload} disabled={!ocrReady} className="hidden" />
                                 </label>
-                                <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                                    <p className="text-sm text-blue-700">💡 <strong>提示:</strong> 使用清晰、光线良好的图片可以提高识别准确率</p>
-                                </div>
                             </div>
                         )}
 
                         {image && (
-                            <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h2 className="text-xl font-bold text-gray-800">识别结果</h2>
-                                    <button onClick={() => { setImage(null); setExtractedText(''); setTranslation(''); setWords([]); }} className="text-red-500 hover:bg-red-50 p-2 rounded-full">
+                            <div className="bg-white rounded-2xl shadow-xl p-6">
+                                <div className="flex justify-between mb-4">
+                                    <h2 className="text-xl font-bold">识别结果</h2>
+                                    <button onClick={() => { setImage(null); setExtractedText(''); setWords([]); }} className="text-red-500 hover:bg-red-50 p-2 rounded-full">
                                         <X />
                                     </button>
                                 </div>
-
-                                <img src={image} alt="上传的图片" className="w-full rounded-lg mb-4 max-h-64 object-contain bg-gray-50" />
-
+                                <img src={image} alt="上传的图" className="w-full rounded-lg mb-4 max-h-64 object-contain bg-gray-50" />
                                 {isLoading ? (
                                     <div className="text-center py-8">
                                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                                        <p className="text-gray-600">正在使用AI识别图片文字...</p>
+                                        <p>AI识别中...</p>
                                         {ocrProgress > 0 && (
                                             <div className="mt-4 max-w-xs mx-auto">
-                                                <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                                                    <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: `${ocrProgress}%` }}></div>
+                                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                                    <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${ocrProgress}%` }}></div>
                                                 </div>
-                                                <p className="text-sm text-gray-500">{ocrProgress}%</p>
+                                                <p className="text-sm mt-2">{ocrProgress}%</p>
                                             </div>
                                         )}
                                     </div>
@@ -402,26 +443,23 @@
                                         {extractedText && (
                                             <>
                                                 <div className="mb-4">
-                                                    <div className="flex items-center justify-between mb-2">
-                                                        <h3 className="font-semibold text-gray-700">识别的文本</h3>
-                                                        <button onClick={() => speakText(extractedText)} className="flex items-center gap-1 text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full text-sm">
-                                                            <Volume2 />
+                                                    <div className="flex justify-between mb-2">
+                                                        <h3 className="font-semibold">识别文本</h3>
+                                                        <button onClick={() => speakText(extractedText)} className="flex items-center gap-1 text-blue-600 px-3 py-1 rounded-full text-sm hover:bg-blue-50">
+                                                            <Volume2 className="w-4 h-4" />
                                                             朗读
                                                         </button>
                                                     </div>
-                                                    <p className="text-gray-800 bg-gray-50 p-4 rounded-lg leading-relaxed">{extractedText}</p>
+                                                    <p className="bg-gray-50 p-4 rounded-lg">{extractedText}</p>
                                                 </div>
-
-                                                <div className="mb-6">
-                                                    <h3 className="font-semibold text-gray-700 mb-2">翻译提示</h3>
-                                                    <p className="text-gray-800 bg-blue-50 p-4 rounded-lg">{translation}</p>
+                                                <div className="mb-4">
+                                                    <p className="bg-blue-50 p-4 rounded-lg">{translation}</p>
                                                 </div>
-
                                                 <div>
-                                                    <h3 className="font-semibold text-gray-700 mb-3">识别到的单词 (点击学习)</h3>
+                                                    <h3 className="font-semibold mb-3">识别的单词</h3>
                                                     <div className="flex flex-wrap gap-2">
-                                                        {words.map((word, index) => (
-                                                            <button key={index} onClick={() => openWordDetail(word)} className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-4 py-2 rounded-full hover:shadow-lg transform hover:scale-105 transition">
+                                                        {words.map((word, i) => (
+                                                            <button key={i} onClick={() => openWordDetail(word)} className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-4 py-2 rounded-full hover:shadow-lg transform hover:scale-105 transition">
                                                                 {word}
                                                             </button>
                                                         ))}
@@ -434,18 +472,17 @@
                             </div>
                         )}
 
-                        <div className="bg-white rounded-2xl shadow-xl p-6">
-                            <h3 className="font-semibold text-gray-800 mb-3">💡 使用说明</h3>
-                            <ul className="space-y-2 text-gray-600 text-sm">
-                                <li>1. 上传包含英文的截图（新闻、社交媒体、文章等）</li>
-                                <li>2. AI自动识别图片中的英文文字（基于Tesseract.js）</li>
-                                <li>3. 点击任意单词进入详细学习页面</li>
-                                <li>4. 查看中文释义、发音、例句和记忆技巧</li>
-                                <li>5. 保存生词到生词本，数据永久保存在本地</li>
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mt-6">
+                            <h3 className="font-semibold mb-3">💡 使用说明</h3>
+                            <ul className="space-y-2 text-sm text-gray-600">
+                                <li>1. 等待 OCR 引擎加载完成(首次约10秒)</li>
+                                <li>2. 上传清晰的英文图片</li>
+                                <li>3. AI自动识别文字</li>
+                                <li>4. 点击单词学习详情</li>
+                                <li>5. 生词本数据自动保存</li>
                             </ul>
-                            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3">
-                                <p className="text-sm text-green-700">✅ <strong>已实现:</strong> 本地存储、OCR识别、语音朗读</p>
-                                <p className="text-sm text-green-700 mt-1">🔄 <strong>待优化:</strong> 翻译API、词典API可根据需要接入</p>
+                            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 text-sm">
+                                <p className="text-green-700">✅ 本地存储 | OCR识别 | 语音朗读</p>
                             </div>
                         </div>
                     </div>
