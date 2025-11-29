@@ -110,25 +110,53 @@
                         }
                         
                         const ocrData = await ocrResponse.json();
-                        const text = ocrData.text;
+                        let text = ocrData.text;
+                        
+                        // 清理文本:去掉特殊符号和图标
+                        text = text
+                            .replace(/[@#$%^&*()_+=\[\]{}|\\:;"'<>,.?/~`！@#￥%……&*（）——+=【】、|；：""''《》，。？]/g, ' ')
+                            .replace(/[^\w\s\-.']/g, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        
                         setExtractedText(text);
                         
-                        // 按段落分割文本
-                        const paras = text.split(/\n\n+/).filter(p => p.trim());
-                        setParagraphs(paras);
-
-                        const translateResponse = await fetch(`${API_BASE_URL}/api/translate`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text })
-                        });
+                        // 按段落分割文本(双换行或多个换行)
+                        const paras = text.split(/\n\n+|\n{2,}/).filter(p => p.trim().length > 0);
                         
-                        if (translateResponse.ok) {
-                            const translateData = await translateResponse.json();
-                            setTranslation(translateData.translation);
-                        } else {
-                            setTranslation('翻译服务暂时不可用');
+                        // 为每个段落获取翻译
+                        const parasWithTranslation = [];
+                        for (const para of paras) {
+                            try {
+                                const transResponse = await fetch(`${API_BASE_URL}/api/translate`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ text: para })
+                                });
+                                
+                                let paraTranslation = '';
+                                if (transResponse.ok) {
+                                    const transData = await transResponse.json();
+                                    paraTranslation = transData.translation;
+                                } else {
+                                    paraTranslation = '翻译服务暂时不可用';
+                                }
+                                
+                                parasWithTranslation.push({
+                                    text: para,
+                                    translation: paraTranslation
+                                });
+                            } catch (error) {
+                                parasWithTranslation.push({
+                                    text: para,
+                                    translation: '翻译失败'
+                                });
+                            }
                         }
+                        
+                        setParagraphs(parasWithTranslation);
+
+
 
                         const wordList = text.match(/\b[a-zA-Z]+\b/g) || [];
                         const uniqueWords = [...new Set(wordList.map(w => w.toLowerCase()))];
@@ -450,26 +478,31 @@
                                             <>
                                                 <div className="mb-4">
                                                     <h3 className="font-semibold text-gray-800 mb-3">识别文本</h3>
-                                                    <div className="space-y-3">
+                                                    <div className="space-y-4">
                                                         {paragraphs.map((para, idx) => (
-                                                            <div key={idx} className="bg-gray-50 p-4 rounded-lg">
-                                                                <div className="flex justify-between items-start mb-2">
-                                                                    <span className="text-xs text-gray-500">段落 {idx + 1}</span>
-                                                                    <button onClick={() => speakText(para)} className="flex items-center gap-1 text-blue-600 px-2 py-1 rounded-full text-xs hover:bg-blue-50">
-                                                                        <Volume2 /> 朗读
-                                                                    </button>
+                                                            <div key={idx} className="border border-gray-200 rounded-lg overflow-hidden">
+                                                                {/* 英文原文 */}
+                                                                <div className="bg-gray-50 p-4">
+                                                                    <div className="flex justify-between items-start mb-2">
+                                                                        <span className="text-xs font-medium text-gray-500 bg-white px-2 py-1 rounded">段落 {idx + 1}</span>
+                                                                        <button 
+                                                                            onClick={() => speakText(para.text)} 
+                                                                            className="flex items-center gap-1 text-blue-600 px-2 py-1 rounded-full text-xs hover:bg-blue-50"
+                                                                        >
+                                                                            <Volume2 /> 朗读
+                                                                        </button>
+                                                                    </div>
+                                                                    <p className="text-gray-800 leading-relaxed">{para.text}</p>
                                                                 </div>
-                                                                <p className="leading-relaxed">{para}</p>
+                                                                {/* 中文翻译 */}
+                                                                <div className="bg-blue-50 p-4 border-t border-blue-100">
+                                                                    <p className="text-sm text-gray-600 mb-1">中文翻译:</p>
+                                                                    <p className="text-gray-700">{para.translation}</p>
+                                                                </div>
                                                             </div>
                                                         ))}
                                                     </div>
                                                 </div>
-                                                {translation && (
-                                                    <div className="mb-6">
-                                                        <h3 className="font-semibold text-gray-800 mb-2">中文翻译</h3>
-                                                        <p className="bg-blue-50 p-4 rounded-lg">{translation}</p>
-                                                    </div>
-                                                )}
                                                 <div>
                                                     <h3 className="font-semibold text-gray-800 mb-3">识别到 {words.length} 个单词</h3>
                                                     <div className="flex flex-wrap gap-2">
