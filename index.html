@@ -125,20 +125,31 @@
                         let lines = [];
                         
                         if (text.includes('\n')) {
-                            // 有换行符:按换行拆分
-                            lines = text.split(/\n+/);
+                            // 方案A: 有明确换行符,按换行拆分
+                            lines = text.split(/\n+/).filter(l => l.trim());
                         } else {
-                            // 无换行符:按句子拆分(句号/问号/感叹号)
-                            const sentences = text.split(/\.\s+|\?\s+|!\s+/);
-                            if (sentences.length > 1) {
+                            // 方案B: 无换行符,按句子拆分
+                            // 匹配: 句号+空格 或 问号+空格 或 感叹号+空格
+                            const sentences = text.split(/(?<=[.!?])\s+/);
+                            
+                            if (sentences.length > 1 && sentences.every(s => s.length > 10)) {
+                                // 每个句子都足够长,按句子拆分
                                 lines = sentences;
                             } else {
-                                // 如果没有句子分隔符,按长度智能拆分
-                                // 每30-50个单词一段
-                                const words = text.split(/\s+/);
-                                const chunkSize = 40;
-                                for (let i = 0; i < words.length; i += chunkSize) {
-                                    lines.push(words.slice(i, i + chunkSize).join(' '));
+                                // 句子太短或拆分效果不好,保持整段
+                                // 如果文本很长(>200字符),按固定长度拆分
+                                if (text.length > 200) {
+                                    const words = text.split(/\s+/);
+                                    const chunkSize = 30; // 每段约30个单词
+                                    for (let i = 0; i < words.length; i += chunkSize) {
+                                        const chunk = words.slice(i, i + chunkSize).join(' ');
+                                        if (chunk.trim().length > 0) {
+                                            lines.push(chunk);
+                                        }
+                                    }
+                                } else {
+                                    // 文本不长,保持完整
+                                    lines = [text];
                                 }
                             }
                         }
