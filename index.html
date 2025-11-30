@@ -128,28 +128,38 @@
                             // 方案A: 有明确换行符,按换行拆分
                             lines = text.split(/\n+/).filter(l => l.trim());
                         } else {
-                            // 方案B: 无换行符,按句子拆分
-                            // 匹配: 句号+空格 或 问号+空格 或 感叹号+空格
-                            const sentences = text.split(/(?<=[.!?])\s+/);
+                            // 方案B: 无换行符,需要智能判断
                             
-                            if (sentences.length > 1 && sentences.every(s => s.length > 10)) {
-                                // 每个句子都足够长,按句子拆分
-                                lines = sentences;
+                            // 检查文本长度和结构
+                            const wordCount = text.split(/\s+/).length;
+                            
+                            if (wordCount <= 30) {
+                                // 文本较短(<=30词),保持完整
+                                lines = [text];
                             } else {
-                                // 句子太短或拆分效果不好,保持整段
-                                // 如果文本很长(>200字符),按固定长度拆分
-                                if (text.length > 200) {
+                                // 文本较长,尝试按句子拆分
+                                // 使用更严格的规则:句号后必须跟大写字母开头的单词
+                                const sentences = text.split(/(?<=[.!?])\s+(?=[A-Z])/);
+                                
+                                // 验证拆分质量:每个句子应该有合理的长度(>15个字符且>3个单词)
+                                const validSentences = sentences.filter(s => {
+                                    const words = s.trim().split(/\s+/);
+                                    return s.trim().length > 15 && words.length > 3;
+                                });
+                                
+                                if (validSentences.length === sentences.length && sentences.length > 1) {
+                                    // 所有句子都合格,使用句子拆分
+                                    lines = sentences;
+                                } else {
+                                    // 拆分质量不好,按固定长度拆分
                                     const words = text.split(/\s+/);
-                                    const chunkSize = 30; // 每段约30个单词
+                                    const chunkSize = 25; // 每段约25个单词
                                     for (let i = 0; i < words.length; i += chunkSize) {
                                         const chunk = words.slice(i, i + chunkSize).join(' ');
                                         if (chunk.trim().length > 0) {
                                             lines.push(chunk);
                                         }
                                     }
-                                } else {
-                                    // 文本不长,保持完整
-                                    lines = [text];
                                 }
                             }
                         }
