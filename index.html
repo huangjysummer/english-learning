@@ -112,43 +112,73 @@
                         const ocrData = await ocrResponse.json();
                         let text = ocrData.text;
                         
-                        // 清理文本:去掉特殊符号和图标
+                        // 第一步:清理文本 - 去掉特殊符号
                         text = text
                             .replace(/[@#$%^&*()_+=\[\]{}|\\:;"'<>,.?/~`！@#￥%……&*（）——+=【】、|；：""''《》，。？]/g, ' ')
                             .replace(/[^\w\s\-.']/g, ' ')
-                            .replace(/\s+/g, ' ')
+                            .replace(/[ \t]+/g, ' ')
                             .trim();
                         
                         setExtractedText(text);
                         
-                        // 按段落分割文本(双换行或多个换行)
-                        const paras = text.split(/\n\n+|\n{2,}/).filter(p => p.trim().length > 0);
+                        // 第二步:智能分段
+                        let lines = [];
                         
-                        // 为每个段落获取翻译
+                        // 尝试按换行符拆分
+                        if (text.includes('\n')) {
+                            lines = text.split(/\n+/);
+                        } else {
+                            // 如果没有换行符,尝试智能拆分
+                            // 检测大写字母开头的单词作为新段落的标志
+                            const segments = text.split(/(?=[A-Z][a-z]+)/);
+                            lines = segments.filter(s => s.trim().length > 0);
+                        }
+                        
+                        // 第三步:过滤和清理每一行
+                        const cleanedLines = lines
+                            .map(line => line.trim())
+                            .filter(line => {
+                                // 过滤掉空行
+                                if (line.length === 0) return false;
+                                // 过滤掉纯数字行(误识别的数字)
+                                if (/^\d+$/.test(line)) return false;
+                                // 过滤掉太短的行(少于3个字符)
+                                if (line.length < 3) return false;
+                                // 过滤掉只有单个单词且是数字+字母的(如 "4", "14")
+                                if (/^[0-9]+[a-z]*$/i.test(line)) return false;
+                                return true;
+                            })
+                            // 进一步清理:去掉行中间的单独数字
+                            .map(line => {
+                                // 去掉单独的数字(前后有空格的数字)
+                                return line.replace(/\s+\d+\s+/g, ' ').trim();
+                            });
+                        
+                        // 第四步:为每行获取翻译
                         const parasWithTranslation = [];
-                        for (const para of paras) {
+                        for (const line of cleanedLines) {
                             try {
                                 const transResponse = await fetch(`${API_BASE_URL}/api/translate`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ text: para })
+                                    body: JSON.stringify({ text: line })
                                 });
                                 
-                                let paraTranslation = '';
+                                let lineTranslation = '';
                                 if (transResponse.ok) {
                                     const transData = await transResponse.json();
-                                    paraTranslation = transData.translation;
+                                    lineTranslation = transData.translation;
                                 } else {
-                                    paraTranslation = '翻译服务暂时不可用';
+                                    lineTranslation = '翻译服务暂时不可用';
                                 }
                                 
                                 parasWithTranslation.push({
-                                    text: para,
-                                    translation: paraTranslation
+                                    text: line,
+                                    translation: lineTranslation
                                 });
                             } catch (error) {
                                 parasWithTranslation.push({
-                                    text: para,
+                                    text: line,
                                     translation: '翻译失败'
                                 });
                             }
