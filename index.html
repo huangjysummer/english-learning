@@ -112,9 +112,9 @@
                         const ocrData = await ocrResponse.json();
                         let text = ocrData.text;
                         
-                        // 第一步:清理文本 - 去掉特殊符号
+                        // 第一步:基础清理
                         text = text
-                            .replace(/[@#$%^&*()_+=\[\]{}|\\:;"'<>,.?/~`！@#￥%……&*（）——+=【】、|；：""''《》，。？]/g, ' ')
+                            .replace(/[@#$%^&*()_+=\[\]{}|\\;"'<>,?/~`！@#￥%……&*（）——+=【】、|；：""''《》，。？]/g, ' ')
                             .replace(/[^\w\s\-.']/g, ' ')
                             .replace(/[ \t]+/g, ' ')
                             .trim();
@@ -124,63 +124,121 @@
                         // 第二步:智能分段
                         let lines = [];
                         
-                        // 尝试按换行符拆分
                         if (text.includes('\n')) {
+                            // 有换行符:按换行拆分
                             lines = text.split(/\n+/);
                         } else {
-                            // 如果没有换行符,尝试智能拆分
-                            // 检测大写字母开头的单词作为新段落的标志
-                            const segments = text.split(/(?=[A-Z][a-z]+)/);
-                            lines = segments.filter(s => s.trim().length > 0);
+                            // 无换行符:按句子拆分(句号/问号/感叹号)
+                            const sentences = text.split(/\.\s+|\?\s+|!\s+/);
+                            if (sentences.length > 1) {
+                                lines = sentences;
+                            } else {
+                                // 如果没有句子分隔符,按长度智能拆分
+                                // 每30-50个单词一段
+                                const words = text.split(/\s+/);
+                                const chunkSize = 40;
+                                for (let i = 0; i < words.length; i += chunkSize) {
+                                    lines.push(words.slice(i, i + chunkSize).join(' '));
+                                }
+                            }
                         }
                         
-                        // 第三步:过滤和清理每一行
+                        // 第三步:清理和过滤
                         const cleanedLines = lines
                             .map(line => line.trim())
                             .filter(line => {
-                                // 过滤掉空行
                                 if (line.length === 0) return false;
-                                // 过滤掉纯数字行(误识别的数字)
-                                if (/^\d+$/.test(line)) return false;
-                                // 过滤掉太短的行(少于3个字符)
-                                if (line.length < 3) return false;
-                                // 过滤掉只有单个单词且是数字+字母的(如 "4", "14")
-                                if (/^[0-9]+[a-z]*$/i.test(line)) return false;
+                                if (/^\d+$/.test(line)) return false;  // 纯数字
+                                if (line.length < 3) return false;  // 太短
                                 return true;
                             })
-                            // 进一步清理:去掉行中间的单独数字
                             .map(line => {
-                                // 去掉单独的数字(前后有空格的数字)
-                                return line.replace(/\s+\d+\s+/g, ' ').trim();
-                            });
+                                // 去掉单独的数字
+                                return line.replace(/\s+\d+\s+/g, ' ').replace(/^\d+\s+/, '').replace(/\s+\d+$/, '').trim();
+                            })
+                            .filter(line => line.length >= 3);  // 再次过滤太短的
                         
-                        // 第四步:为每行获取翻译
+                        // 第四步:批量翻译(减少API调用次数)
                         const parasWithTranslation = [];
-                        for (const line of cleanedLines) {
-                            try {
-                                const transResponse = await fetch(`${API_BASE_URL}/api/translate`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ text: line })
-                                });
+                        
+                        // 如果段落太多(>10个),合并翻译
+                        if (cleanedLines.length > 10) {
+                            // 每3-5行合并一次翻译
+                            const batchSize = 3;
+                            for (let i = 0; i < cleanedLines.length; i += batchSize) {
+                                const batch = cleanedLines.slice(i, i + batchSize);
+                                const batchText = batch.join('\n');
                                 
-                                let lineTranslation = '';
-                                if (transResponse.ok) {
-                                    const transData = await transResponse.json();
-                                    lineTranslation = transData.translation;
-                                } else {
-                                    lineTranslation = '翻译服务暂时不可用';
+                                try {
+                                    const transResponse = await fetch(`${API_BASE_URL}/api/translate`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ text: batchText })
+                                    });
+                                    
+                                    if (transResponse.ok) {
+                                        const transData = await transResponse.json();
+                                        const translations = transData.translation.split('\n');
+                                        
+                                        batch.forEach((line, idx) => {
+                                            parasWithTranslation.push({
+                                                text: line,
+                                                translation: translations[idx] || transData.translation
+                                            });
+                                        });
+                                    } else {
+                                        batch.forEach(line => {
+                                            parasWithTranslation.push({
+                                                text: line,
+                                                translation: '翻译失败,请检查后端配置'
+                                            });
+                                        });
+                                    }
+                                } catch (error) {
+                                    batch.forEach(line => {
+                                        parasWithTranslation.push({
+                                            text: line,
+                                            translation: '网络错误'
+                                        });
+                                    });
                                 }
                                 
-                                parasWithTranslation.push({
-                                    text: line,
-                                    translation: lineTranslation
-                                });
-                            } catch (error) {
-                                parasWithTranslation.push({
-                                    text: line,
-                                    translation: '翻译失败'
-                                });
+                                // 避免请求过快
+                                await new Promise(resolve => setTimeout(resolve, 500));
+                            }
+                        } else {
+                            // 段落少,单独翻译
+                            for (const line of cleanedLines) {
+                                try {
+                                    const transResponse = await fetch(`${API_BASE_URL}/api/translate`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ text: line })
+                                    });
+                                    
+                                    if (transResponse.ok) {
+                                        const transData = await transResponse.json();
+                                        parasWithTranslation.push({
+                                            text: line,
+                                            translation: transData.translation
+                                        });
+                                    } else {
+                                        const errorText = await transResponse.text();
+                                        console.error('翻译失败:', errorText);
+                                        parasWithTranslation.push({
+                                            text: line,
+                                            translation: '翻译API错误,请检查后端日志'
+                                        });
+                                    }
+                                } catch (error) {
+                                    console.error('翻译请求失败:', error);
+                                    parasWithTranslation.push({
+                                        text: line,
+                                        translation: '网络连接失败'
+                                    });
+                                }
+                                
+                                await new Promise(resolve => setTimeout(resolve, 300));
                             }
                         }
                         
